@@ -1,0 +1,140 @@
+- name: VPN
+  hosts: all
+  become: yes
+  tasks:
+
+  - name: fix repos
+    shell: cd /etc/yum.repos.d/ && sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-* && sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+    when: ansible_os_family == "RedHat"
+
+# Включим проброс пакетов на всех хостах
+  - name: allow forwarding
+    sysctl:
+      name: net.ipv4.ip_forward
+      value: 1
+      sysctl_set: yes
+
+# Установим epel репозиторий:
+  - name: install epel
+    dnf:
+      name: 
+        - epel-release
+      state: present
+      update_cache: yes
+
+# Установим ocserv:
+  - name: install ocserv && easy-rsa 
+    dnf:
+      name: 
+        - ocserv 
+        - easy-rsa         
+      state: present
+      update_cache: yes
+
+# Выключим SELinux
+  - name: Disable SELinux
+    ansible.posix.selinux:
+      state: disabled
+
+# Инициализируем pki
+  - name: init pki
+    shell: cd /etc/ocserv/ && /usr/share/easy-rsa/3.0.8/easyrsa init-pki
+
+# Сгенерируем необходимые ключи и сертификаты для сервера
+  - name: generate certs server
+    shell: cd /etc/ocserv/ && \
+           echo 'rasvpn' | /usr/share/easy-rsa/3.0.8/easyrsa build-ca nopass && \
+           echo 'rasvpn' | /usr/share/easy-rsa/3.0.8/easyrsa gen-req server nopass && \
+           echo 'yes' | /usr/share/easy-rsa/3.0.8/easyrsa sign-req server server && \
+           /usr/share/easy-rsa/3.0.8/easyrsa gen-dh 
+           
+# Сгенерируем необходимые сертификаты для клиента
+  - name: generate certs client
+    shell: cd /etc/ocserv/ &&
+           echo 'client' | /usr/share/easy-rsa/3/easyrsa gen-req client nopass && \
+           echo 'yes' | /usr/share/easy-rsa/3/easyrsa sign-req client client
+
+# Заберём с сервера сертификаты
+  - name: fetch key
+    fetch:
+      src: "{{ item.src }}"
+      dest: "{{ item.dest }}"
+    with_items:
+      - { src: "/etc/ocserv/pki/ca.crt", dest: "ca.crt"}
+      - { src: "/etc/ocserv/pki/issued/client.crt", dest: "client.crt"}
+      - { src: "/etc/ocserv/pki/private/client.key", dest: "client.key"}
+
+# Скопируем ocserv.conf
+  - name: Copy ocserv.conf
+    template: 
+      src: "{{ item.src }}"
+      dest: "{{ item.dest }}"
+      owner: root
+      group: root
+      mode: "{{ item.mode }}"
+    with_items:
+      - { src: "templates/ocserv.conf", dest: "/etc/ocserv/ocserv.conf", mode: "0644"}
+
+# Включим ocserv
+  - name: start and enable ocserv
+    systemd:
+      name: ocserv
+      state: started
+      enabled: yes
+
+
+
+
+
+# # Инициализируем pki
+#   - name: init pki
+#     shell: cd /etc/openvpn/ && /usr/share/easy-rsa/3.0.8/easyrsa init-pki
+
+# # Сгенерируем необходимые ключи и сертификаты для сервера
+#   - name: generate certs server
+#     shell: cd /etc/openvpn/ && \
+#            echo 'rasvpn' | /usr/share/easy-rsa/3.0.8/easyrsa build-ca nopass && \
+#            echo 'rasvpn' | /usr/share/easy-rsa/3.0.8/easyrsa gen-req server nopass && \
+#            echo 'yes' | /usr/share/easy-rsa/3.0.8/easyrsa sign-req server server && \
+#            /usr/share/easy-rsa/3.0.8/easyrsa gen-dh && \
+#            openvpn --genkey --secret ca.key
+
+# # Сгенерируем необходимые сертификаты для клиента
+#   - name: generate certs client
+#     shell: cd /etc/openvpn/ &&
+#            echo 'client' | /usr/share/easy-rsa/3/easyrsa gen-req client nopass && \
+#            echo 'yes' | /usr/share/easy-rsa/3/easyrsa sign-req client client
+
+# # Скопируем server.conf и unit-файл на сервер
+#   - name: Copy server.conf & unit-file
+#     template: 
+#       src: "{{ item.src }}"
+#       dest: "{{ item.dest }}"
+#       owner: root
+#       group: root
+#       mode: "{{ item.mode }}"
+#     with_items:
+#       - { src: "templates/server.conf", dest: "/etc/openvpn/server.conf", mode: "0644"}
+#       - { src: "templates/openvpn@.service", dest: "/etc/systemd/system/openvpn@.service", mode: "0644"}
+
+# # Зададим параметр iroute для клиента
+#   - name: generate certs client
+#     shell: echo 'iroute 10.10.10.0 255.255.255.0' > /etc/openvpn/client/client
+
+# # Включим openvpn@server на сервере
+#   - name: start and enable openvpn@server
+#     systemd:
+#       name: openvpn@server
+#       state: started
+#       enabled: yes
+
+# # Заберём с сервера сертификаты
+#   - name: fetch key
+#     fetch:
+#       src: "{{ item.src }}"
+#       dest: "{{ item.dest }}"
+#     with_items:
+#       - { src: "/etc/openvpn/pki/ca.crt", dest: "ca.crt"}
+#       - { src: "/etc/openvpn/pki/issued/client.crt", dest: "client.crt"}
+#       - { src: "/etc/openvpn/pki/private/client.key", dest: "client.key"}
+
